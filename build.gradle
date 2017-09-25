@@ -1,0 +1,189 @@
+buildscript {
+  repositories {
+    mavenCentral()
+    maven { url 'http://dl.bintray.com/jetbrains/intellij-plugin-service' }
+    maven { url 'https://jitpack.io' }
+  }
+  dependencies {
+    classpath "com.github.hurricup:gradle-grammar-kit-plugin:2017.1.1"
+  }
+}
+
+plugins {
+    id "org.jetbrains.intellij" version "0.2.17"
+}
+
+import org.jetbrains.grammarkit.tasks.GenerateLexer
+import org.jetbrains.grammarkit.tasks.GenerateParser
+
+allprojects {
+
+  apply plugin: 'java'
+  apply plugin: 'idea'
+  apply plugin: 'org.jetbrains.intellij'
+  apply plugin: 'org.jetbrains.grammarkit'
+  apply plugin: 'jacoco'
+
+  group pluginGroup
+  version = pluginVersion
+
+  sourceCompatibility = javaVersion
+  targetCompatibility = javaVersion
+
+  tasks.withType(JavaCompile) { options.encoding = 'UTF-8' }
+
+  sourceSets {
+    main {
+      java {
+        srcDirs = ['src/main/java',
+                   'generated/src']
+      }
+      resources {
+        srcDirs = ['src/main/resources',
+                   'generated/resources']
+      }
+    }
+  }
+
+  repositories {
+    mavenLocal()
+    mavenCentral()
+    maven { url 'https://dl.bintray.com/jetbrains/markdown' }
+    maven { url 'https://jitpack.io' }
+  }
+}
+
+idea {
+  project {
+    languageLevel = javaVersion
+  }
+}
+
+intellij {
+  def ideaVersionExternDefinition = System.getenv("IDEA_VERSION")
+  version = ideaVersionExternDefinition ? ideaVersionExternDefinition : ideaVersion
+  println "Building for IntelliJ version: ${version}"
+
+  pluginName pluginName
+  downloadSources false
+
+  updateSinceUntilBuild false
+  sameSinceUntilBuild Boolean.valueOf(isEAP)
+
+  sandboxDirectory = "${rootProject.projectDir}/idea-sandbox/idea-${version}"
+
+  plugins 'coverage'
+
+  publishPlugin {
+    username publishUsername
+    password publishPassword
+  }
+}
+
+grammarKit {
+  //tag or short commit hash of IntelliJ patched JFlex
+  jflexRelease = '1.7.0'
+  //tag or short commit hash of Grammar-Kit to use
+  grammarKitRelease = '1.5.2'
+}
+
+plugins.withType(JavaPlugin) {
+  test {
+    systemProperty "NO_FS_ROOTS_ACCESS_CHECK", "true"
+  }
+}
+
+jacocoTestReport {
+  reports {
+    xml.enabled = true
+    html.enabled = true
+  }
+}
+
+// Configurations
+configurations {
+  lombok
+  hrisey
+}
+
+dependencies {
+  lombok group: 'org.projectlombok', name: 'lombok', version: '1.16.18', classifier: 'sources', ext: 'jar'
+  hrisey group: 'pl.mg6.hrisey', name: 'hrisey', version: '0.3.1', classifier: 'sources', ext: 'jar'
+
+  compile(project(':patcher')) {
+    exclude group: 'org.javassist'
+  }
+
+  testCompile group: 'junit', name: 'junit', version: '4.12'
+  testCompile group: 'org.mockito', name: 'mockito-core', version: '1.+'
+}
+
+// Tasks
+copy {
+  includeEmptyDirs = false
+  from({ zipTree(configurations.lombok.singleFile) }) {
+    include 'lombok/extern/**'
+    include 'lombok/experimental/**'
+    include 'lombok/Builder.java'
+    include 'lombok/AccessLevel.java'
+    include 'lombok/*ArgsConstructor.java'
+    include 'lombok/Cleanup.java'
+    include 'lombok/Data.java'
+    include 'lombok/Delegate.java'
+    include 'lombok/Getter.java'
+    include 'lombok/Setter.java'
+    include 'lombok/Equals*.java'
+    include 'lombok/NonNull.java'
+    include 'lombok/Synchronized.java'
+    include 'lombok/ToString.java'
+    include 'lombok/SneakyThrows.java'
+    include 'lombok/Value.java'
+    include 'lombok/val.java'
+    include 'lombok/var.java'
+    include 'lombok/Singular.java'
+    include 'lombok/core/handlers/Singulars.java'
+  }
+  into("generated/src")
+}
+
+copy {
+  includeEmptyDirs = false
+  from({ zipTree(configurations.hrisey.singleFile) }) {
+    include 'hrisey/Parcelable.java'
+    include 'hrisey/Preferences.java'
+  }
+  into("generated/src")
+}
+
+copy {
+  includeEmptyDirs = false
+  from({ zipTree(configurations.lombok.singleFile) }) {
+    include '**/*.txt'
+  }
+  into("generated/resources")
+}
+
+task generateLombokConfigParser(type: GenerateParser) {
+  println "Generating Parser for GrammerKit: ${grammarKit.grammarKitRelease}"
+
+  source 'src/main/resources/de/plushnikov/intellij/plugin/language/lombokConfig.bnf'
+  targetRoot = 'generated/src'
+  pathToParser '/de/plushnikov/intellij/plugin/language/parser/LombokConfigParser.java'
+  pathToPsiRoot '/de/plushnikov/intellij/plugin/language/psi'
+}
+
+task generateLombokConfigLexer(type: GenerateLexer) {
+  dependsOn generateLombokConfigParser
+  println "Generating Lexer for JFlexRelease: ${grammarKit.jflexRelease}"
+
+  source = "src/main/resources/de/plushnikov/intellij/plugin/language/lombokConfig.flex"
+  targetDir = "generated/src/de/plushnikov/intellij/plugin/language"
+  targetClass = "LombokConfigLexer"
+}
+
+clean.doFirst {
+  delete 'generated', 'out'
+}
+
+compileJava.dependsOn generateLombokConfigLexer
+check.dependsOn jacocoTestReport
